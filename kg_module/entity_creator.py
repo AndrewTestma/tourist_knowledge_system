@@ -6,7 +6,7 @@ class EntityCreator:
     """实体创建器"""
     def __init__(self):
         """初始化实体创建器"""
-        self.neo4j_conn = Neo4jConnection()
+        self.neo4j_conn = Neo4jConnection() # 仅保留连接，不主动创建会话
         self.neo4j_conn.connect()
         self.logger = logging.getLogger("entity_creator")
 
