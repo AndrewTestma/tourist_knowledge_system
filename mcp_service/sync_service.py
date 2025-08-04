@@ -39,7 +39,7 @@ class Neo4jSyncService:
             if "sub_attractions" in data:
                 for sub_attraction in data["sub_attractions"]:
                     try:
-                        entity_id = self.entity_creator.create_sub_attraction(sub_attraction)
+                        entity_id = self.entity_creator.create_sub_attraction(sub_attraction,session)
                         self.logger.info(f"子景点数据同步成功: {entity_id}")
                     except Exception as e:
                         self.logger.error(f"子景点数据同步失败: {str(e)}")
@@ -47,7 +47,7 @@ class Neo4jSyncService:
             if "transport_hubs" in data:
                 for transport_hub in data["transport_hubs"]:
                     try:
-                        entity_id = self.entity_creator.create_transport_hub(transport_hub)
+                        entity_id = self.entity_creator.create_transport_hub(transport_hub,session)
                         self.logger.info(f"交通枢纽数据同步成功: {entity_id}")
                     except Exception as e:
                         self.logger.error(f"交通枢纽数据同步失败: {str(e)}")
@@ -55,7 +55,7 @@ class Neo4jSyncService:
             if "facilities" in data:
                 for facility in data["facilities"]:
                     try:
-                        entity_id = self.entity_creator.create_facility(facility)
+                        entity_id = self.entity_creator.create_facility(facility,session)
                         self.logger.info(f"周边设施数据同步成功: {entity_id}")
                     except Exception as e:
                         self.logger.error(f"周边设施数据同步失败: {str(e)}")

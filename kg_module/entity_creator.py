@@ -40,9 +40,8 @@ class EntityCreator:
                 self.logger.error(f"处理坐标失败: {str(e)}")
                 del properties["location"]
 
-        with self.neo4j_conn.get_session() as session:
             try:
-                result = session.run(
+                result = tx.run(
                     """
                     MERGE (a:Attraction {id: $id})
                     SET a += $properties
@@ -58,30 +57,29 @@ class EntityCreator:
                 self.logger.error(f"景点创建失败: {str(e)}")
                 raise
 
-    def create_sub_attraction(self, properties):
+    def create_sub_attraction(self, properties,tx):
         """创建子景点实体"""
         if not properties.get("id", "").startswith("SA"):
             raise ValueError("子景点ID必须以'SA'为前缀")
 
-        with self.neo4j_conn.get_session() as session:
-            try:
-                result = session.run(
-                    """
-                    MERGE (s:SubAttraction {id: $id})
-                    SET s += $properties
-                    RETURN s.id AS id
-                    """,
-                    id=properties["id"],
-                    properties={k: v for k, v in properties.items() if k != "id"}
-                )
-                entity_id = result.single()["id"]
-                self.logger.info(f"子景点创建成功: {entity_id}")
-                return entity_id
-            except Exception as e:
-                self.logger.error(f"子景点创建失败: {str(e)}")
-                raise
+        try:
+            result = tx.run(
+                """
+                MERGE (s:SubAttraction {id: $id})
+                SET s += $properties
+                RETURN s.id AS id
+                """,
+                id=properties["id"],
+                properties={k: v for k, v in properties.items() if k != "id"}
+            )
+            entity_id = result.single()["id"]
+            self.logger.info(f"子景点创建成功: {entity_id}")
+            return entity_id
+        except Exception as e:
+            self.logger.error(f"子景点创建失败: {str(e)}")
+            raise
 
-    def create_transport_hub(self, properties):
+    def create_transport_hub(self, properties,tx):
         """创建交通枢纽实体"""
         if not properties.get("id", "").startswith("TH"):
             raise ValueError("交通枢纽ID必须以'TH'为前缀")
@@ -109,9 +107,8 @@ class EntityCreator:
                 self.logger.error(f"处理坐标失败: {str(e)}")
                 del properties["location"]
 
-        with self.neo4j_conn.get_session() as session:
             try:
-                result = session.run(
+                result = tx.run(
                     """
                     MERGE (t:TransportHub {id: $id})
                     SET t += $properties
@@ -127,7 +124,7 @@ class EntityCreator:
                 self.logger.error(f"交通枢纽创建失败: {str(e)}")
                 raise
 
-    def create_facility(self, properties):
+    def create_facility(self, properties,tx):
         """创建周边设施实体"""
         if not properties.get("id", "").startswith("FA"):
             raise ValueError("周边设施ID必须以'FA'为前缀")
@@ -155,9 +152,8 @@ class EntityCreator:
                 self.logger.error(f"处理坐标失败: {str(e)}")
                 del properties["location"]
 
-        with self.neo4j_conn.get_session() as session:
             try:
-                result = session.run(
+                result = tx.run(
                     """
                     MERGE (f:Facility {id: $id})
                     SET f += $properties
