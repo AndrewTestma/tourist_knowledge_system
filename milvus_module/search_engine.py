@@ -104,6 +104,7 @@ class SearchEngine:
             structured_results.sort(key=lambda x: x["similarity_score"], reverse=True)
 
             # 4. 返回结构化的检索结果
+            logging.info(f"structured_results: {structured_results}")
             return structured_results
 
         except Exception as e:

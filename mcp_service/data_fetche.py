@@ -123,7 +123,7 @@ class StaticDataFetcher:
         """从数据库获取向量数据"""
         with self.Session() as session:
             # 假设向量数据存储在vectors表，包含entity_id和vector字段
-            query = "SELECT id, description, tags FROM attractions"
+            query = "SELECT id, name, description, tags FROM attractions"
             return pd.read_sql(query, session.bind).to_dict(orient='records')
 
 
