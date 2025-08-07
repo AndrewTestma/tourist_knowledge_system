@@ -82,8 +82,8 @@ class DataSyncService:
         vectors = processed_data.get("vectors", [])
 
         # 同步到 Neo4j - 修复：启用上下文管理器并确保正确的会话管理
-        with self.neo4j_sync:
-            self.neo4j_sync.sync_data_to_neo4j(processed_data)
+        # with self.neo4j_sync:
+        #     self.neo4j_sync.sync_data_to_neo4j(processed_data)
 
         # 同步到 Milvus
         if vectors:

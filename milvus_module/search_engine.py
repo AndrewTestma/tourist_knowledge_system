@@ -65,51 +65,62 @@ class SearchEngine:
             raise
 
     def search_similar_attractions(self, query: str, top_k: int = 10, threshold: float = 0.8) -> List[Dict[str, Any]]:
-        """搜索相似景点（逻辑与原方法一致，仅向量化方式修改）"""
+        """搜索相似景点（支持多向量字段联合搜索）"""
         try:
             # 1. 将查询文本转换为向量（通过API调用）
             query_vector = self._text_to_vector(query)
 
-            # 2. 执行向量相似度搜索（参考vector_manager的搜索参数配置）
-            search_params = {
-                "data": [query_vector],
-                "anns_field": "description_vector",  # 使用描述向量进行匹配
-                "param": {"metric_type": "L2", "params": {"nprobe": 20}},  # 与vector_manager保持一致的metric_type
-                "limit": top_k,
-                "output_fields": ["entity_id"]  # 返回实体ID
-            }
+            # 2. 定义需要搜索的向量字段列表
+            search_fields = ["name", "alias", "description_vector"]  # 新增多字段搜索
+            all_results = []  # 存储所有字段的搜索结果
 
-            # 执行搜索（pymilvus的Collection.search接口）
-            results = self.collection.search(**search_params)
+            # 3. 对每个向量字段执行搜索
+            for field in search_fields:
+                # 配置当前字段的搜索参数
+                search_params = {
+                    "data": [query_vector],
+                    "anns_field": field,  # 动态指定搜索字段
+                    "param": {"metric_type": "L2", "params": {"nprobe": 20}},
+                    "limit": top_k,  # 每个字段先取top_k结果
+                    "output_fields": ["entity_id"]
+                }
 
-            # 3. 对检索结果进行相关性排序与过滤
-            structured_results = []
-            for hits in results:
-                for hit in hits:
-                    # 过滤低于阈值的结果（注意：L2距离越小越相似，阈值需根据实际调整）
-                    if hit.distance > threshold:
-                        continue
+                # 执行搜索并收集结果
+                results = self.collection.search(**search_params)
+                for hits in results:
+                    for hit in hits:
+                        # 过滤超过阈值的结果（L2距离越小越相似，超过阈值则跳过）
+                        if hit.distance > threshold:
+                            continue
+                        # 记录来源字段（可选，用于调试）
+                        all_results.append({
+                            "entity_id": hit.entity.get("entity_id"),
+                            "similarity_score": 1 / (1 + hit.distance),
+                            "source_field": field
+                        })
 
-                    # 获取实体基本信息
-                    entity_info = self.entity_manager.get_entity_by_id(hit.entity.get("entity_id"))
+            # 4. 合并去重：保留同一实体的最高相似度记录
+            merged = {}
+            for item in all_results:
+                entity_id = item["entity_id"]
+                score = item["similarity_score"]
+                if entity_id not in merged or score > merged[entity_id]["similarity_score"]:
+                    merged[entity_id] = {
+                        "entity_id": entity_id,
+                        "similarity_score": score,
+                        "basic_info": self.entity_manager.get_entity_by_id(entity_id)
+                    }
 
-                    # 构建结构化结果（与vector_manager返回格式保持一致）
-                    structured_results.append({
-                        "entity_id": hit.entity.get("entity_id"),
-                        "similarity_score": 1 / (1 + hit.distance),  # 与vector_manager一致的相似度转换
-                        "basic_info": entity_info
-                    })
+            # 5. 按相似度降序排序，取前top_k
+            final_results = sorted(merged.values(), key=lambda x: x["similarity_score"], reverse=True)[:top_k]
 
-            # 按相似度分数降序排序
-            structured_results.sort(key=lambda x: x["similarity_score"], reverse=True)
-
-            # 4. 返回结构化的检索结果
-            logging.info(f"structured_results: {structured_results}")
-            return structured_results
+            logging.info(f"多字段搜索完成，共找到{len(final_results)}个有效结果")
+            return final_results
 
         except Exception as e:
             self.logger.error(f"景点相似度搜索失败: {str(e)}")
             raise
+
 
     def close(self):
         """关闭Milvus连接（参考vector_manager的连接管理方式）"""

@@ -96,9 +96,16 @@ class StaticDataFetcher:
     #     return entities
 
     def fetch_attractions(self):
-        """从数据库获取景点数据"""
+        """从数据库获取景点数据（修正后）"""
         with self.Session() as session:
-            query = "SELECT * FROM attractions"
+            # 使用数据库函数将几何字段转为WKT字符串（如MySQL的ST_AsWKT，PostGIS的ST_AsText）
+            query = """
+            SELECT id, name, alias, category, 
+                   ST_AsWKT(location) AS location,  -- 关键修改：将二进制几何转为WKT文本
+                   address, area, opening_hours_regular, ticket_price_regular, 
+                   description, tags, official_website, contact, built_year, grade 
+            FROM attractions
+            """
             return pd.read_sql(query, session.bind).to_dict(orient='records')
 
     def fetch_sub_attractions(self):
@@ -110,20 +117,30 @@ class StaticDataFetcher:
     def fetch_transport_hubs(self):
         """从数据库获取交通枢纽数据"""
         with self.Session() as session:
-            query = "SELECT * FROM transport_hubs"
+            query = """
+            SELECT id,name,type,
+                    ST_AsWKT(location) AS location, 
+                    distance_to_attraction,`accessible` 
+            FROM transport_hubs
+            """
             return pd.read_sql(query, session.bind).to_dict(orient='records')
 
     def fetch_facilities(self):
         """从数据库获取周边设施数据"""
         with self.Session() as session:
-            query = "SELECT * FROM facilities"
+            query = """
+            SELECT id,name,type,
+                    ST_AsWKT(location) AS location, 
+                    distance_to_attraction,price_level,business_hours 
+            FROM facilities
+            """
             return pd.read_sql(query, session.bind).to_dict(orient='records')
 
     def fetch_vectors(self):
         """从数据库获取向量数据"""
         with self.Session() as session:
             # 假设向量数据存储在vectors表，包含entity_id和vector字段
-            query = "SELECT id, name, description, tags FROM attractions"
+            query = "SELECT id, name,alias, description, tags FROM attractions"
             return pd.read_sql(query, session.bind).to_dict(orient='records')
 
 

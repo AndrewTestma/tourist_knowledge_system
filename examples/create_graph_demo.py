@@ -29,7 +29,8 @@ def main():
         "built_year": 1420,
         "grade": "AAAAA"
     }
-    attraction_id = entity_creator.create_attraction(attraction)
+    with entity_creator.neo4j_conn.get_session() as session:
+        attraction_id = entity_creator.create_attraction(attraction,session)
 
     # 创建子景点
     sub_attraction = {
@@ -40,7 +41,8 @@ def main():
         "visiting_duration": 20,
         "highlight": "金銮殿,皇权象征"
     }
-    sub_id = entity_creator.create_sub_attraction(sub_attraction)
+    with entity_creator.neo4j_conn.get_session() as session:
+        sub_id = entity_creator.create_sub_attraction(sub_attraction,session)
 
     # 创建交通枢纽
     transport_hub = {
@@ -51,7 +53,8 @@ def main():
         "distance_to_attraction": 0.8,
         "accessible": True
     }
-    transport_id = entity_creator.create_transport_hub(transport_hub)
+    with entity_creator.neo4j_conn.get_session() as session:
+        transport_id = entity_creator.create_transport_hub(transport_hub,session)
 
     # 创建周边设施
     facility = {
@@ -63,7 +66,8 @@ def main():
         "price_level": 3,
         "business_hours": "09:00-21:00"
     }
-    facility_id = entity_creator.create_facility(facility)
+    with entity_creator.neo4j_conn.get_session() as session:
+        facility_id = entity_creator.create_facility(facility,session)
 
     # 3. 创建关系
     rel_creator = RelationshipCreator()
