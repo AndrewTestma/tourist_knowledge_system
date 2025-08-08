@@ -30,12 +30,31 @@ class MilvusConfig:
     token: str
     api_url: str
 
+
+@dataclass
+class InfluxDBConfig:
+    """InfluxDB配置"""
+    host: str
+    port: int
+    username: str
+    password: str
+    database: str
+
+
+@dataclass
+class WeatherConfig:
+    """天气配置"""
+    api_key: str
+    api_url: str
+
 @dataclass
 class AppConfig:
     """应用全局配置"""
     db: DatabaseConfig
     neo4j: Neo4jConfig
     milvus: MilvusConfig
+    influxdb: InfluxDBConfig
+    weather: WeatherConfig
     embedding_model: str
     batch_size: int
 
@@ -69,10 +88,25 @@ def load_config() -> AppConfig:
         api_url=config.get('milvus', 'api_url')
     )
 
+    influxdb_config = InfluxDBConfig(
+        host=config.get('influxdb', 'host'),
+        port=config.getint('influxdb', 'port'),
+        username=config.get('influxdb', 'username'),
+        password=config.get('influxdb', 'password'),
+        database=config.get('influxdb', 'database')
+    )
+
+    weather_config = WeatherConfig(
+        api_key=config.get('weather', 'api_key'),
+        api_url=config.get('weather', 'api_url')
+    )
+
     app_config = AppConfig(
         db=db_config,
         neo4j=neo4j_config,
         milvus=milvus_config,
+        influxdb=influxdb_config,
+        weather=weather_config,
         embedding_model=config.get('app', 'embedding_model'),
         batch_size=config.getint('app', 'batch_size')
     )

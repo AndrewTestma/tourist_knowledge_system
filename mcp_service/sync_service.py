@@ -1,9 +1,17 @@
+import datetime
+import time
+from typing import Optional, List, Dict
+
 from kg_module.entity_creator import EntityCreator
-from common.config import Neo4jConfig, MilvusConfig
-from .data_fetche import StaticDataFetcher
-from .data_processor import DataProcessor
+from kg_module.relationship_manager import DynamicAttributeManager
 from milvus_module.vector_manager import VectorManager
 import logging
+
+from .data_fetche import StaticDataFetcher
+from .data_processor import DataProcessor
+from .weather_fetcher import WeatherDataFetcher
+from .weather_processor import WeatherDataProcessor
+
 
 class Neo4jSyncService:
     def __init__(self):
@@ -90,3 +98,85 @@ class DataSyncService:
             self.milvus_sync.generate_and_insert_vectors(vectors)
 
         self.logger.info("数据同步完成")
+
+class WeatherSyncService:
+    """动态属性同步服务，负责按不同频率同步各类动态数据"""
+    def __init__(self):
+        self.fetcher = WeatherDataFetcher()
+        self.processor = WeatherDataProcessor()
+        self.storage = DynamicAttributeManager()
+        self.logger = logging.getLogger("weather_sync_service")
+
+    def sync_weather_data(self, entity_id: str, longitude: float, latitude: float) -> bool:
+        """
+        同步指定实体的天气数据（获取->处理->存储）
+
+        :param entity_id: 知识图谱实体ID
+        :param longitude: 经度
+        :param latitude: 纬度
+        :return: 同步成功返回True，否则返回False
+        """
+        try:
+            # 1. 获取原始天气数据
+            raw_data = self.fetcher.fetch_weather(entity_id, longitude, latitude)
+            if not raw_data:
+                self.logger.error(f"无法获取实体 {entity_id} 的天气数据")
+                return False
+
+            # 2. 处理原始数据
+            processed_data = self.processor.process_weather_data(entity_id, raw_data)
+            if not processed_data:
+                self.logger.error(f"无法处理实体 {entity_id} 的天气数据")
+                return False
+
+            # 3. 存储处理后的数据
+            storage_result = self.storage.store_weather_attributes(processed_data)
+            return storage_result
+
+        except Exception as e:
+            self.logger.error(f"同步天气数据时发生错误: {str(e)}, 实体ID: {entity_id}")
+            return False
+
+    def get_entity_weather(self, entity_id: str, attribute_type: Optional[str] = None) -> List[Dict]:
+        """
+        获取指定实体的天气数据
+
+        :param entity_id: 实体ID
+        :param attribute_type: 可选，指定属性类型
+        :return: 天气属性数据列表
+        """
+        return self.storage.get_latest_weather(entity_id, attribute_type)
+
+    def check_and_update_weather(self, entity_id: str, longitude: float, latitude: float,
+                                 update_interval: int = 3600) -> List[Dict]:
+        """
+        检查并更新实体天气数据（自动判断是否需要更新）
+
+        :param entity_id: 实体ID
+        :param longitude: 经度
+        :param latitude: 纬度
+        :param update_interval: 更新间隔（秒），默认1小时
+        :return: 最新天气数据列表
+        """
+        # 1. 获取当前最新数据
+        latest_weather = self.get_entity_weather(entity_id)
+        current_time = datetime.datetime.now(datetime.timezone.utc)
+
+        # 2. 判断是否需要更新（无数据或超过更新间隔）
+        need_update = True
+        if latest_weather:
+            try:
+                latest_time = datetime.datetime.fromisoformat(latest_weather[0]["time"])
+                time_diff = (current_time - latest_time).total_seconds()
+                need_update = time_diff > update_interval
+            except (KeyError, ValueError) as e:
+                self.logger.warning(f"解析最新天气时间失败: {str(e)}, 强制更新")
+
+        # 3. 需要更新时执行同步
+        if need_update:
+            sync_success = self.sync_weather_data(entity_id, longitude, latitude)
+            if not sync_success:
+                self.logger.warning(f"天气数据更新失败，实体ID: {entity_id}")
+
+        # 4. 返回最新数据（可能是旧数据或新数据）
+        return self.get_entity_weather(entity_id)

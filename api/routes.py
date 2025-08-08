@@ -1,5 +1,7 @@
 import logging
 from flask import Blueprint, request, jsonify
+
+from mcp_service.sync_service import WeatherSyncService
 from .schemas import SearchRequest, SearchResponse, SearchResult
 from milvus_module.search_engine import SearchEngine
 from common.config import load_config
@@ -57,6 +59,33 @@ def search_attractions():
             threshold=req_data.threshold
         )
 
+        # 新增：初始化天气同步服务
+        weather_service = WeatherSyncService()
+
+        # 遍历搜索结果，添加天气数据
+        for item in results:
+            # 从basic_info中获取POINT格式的经纬度（假设字段名为"location"）
+            location_str = item["basic_info"].get("location")
+            if not location_str:
+                logger.warning(f"景点 {item['entity_id']} 缺少经纬度信息")
+                continue
+
+            # 解析经纬度
+            latitude, longitude = parse_point_location(location_str)
+            if not all([latitude, longitude]):
+                logger.warning(f"景点 {item['entity_id']} 经纬度解析失败")
+                continue
+
+            # 检查并更新天气数据（默认1小时间隔）
+            latest_weather = weather_service.check_and_update_weather(
+                entity_id=item["entity_id"],
+                longitude=longitude,  # 注意POINT格式是"纬度 经度"，此处取longitude为第二个值
+                latitude=latitude  # latitude为第一个值
+            )
+
+            # 将天气数据添加到结果中（可根据需求调整字段名）
+            item["basic_info"]["weather_data"] = latest_weather
+
         # 记录搜索结果数量
         logger.info(f"搜索完成 | 返回结果数: {len(results)}")
 
@@ -75,3 +104,22 @@ def search_attractions():
         # 记录详细异常信息（包含堆栈）
         logger.error(f"搜索处理失败: {str(e)}", exc_info=True)
         return jsonify({"error": str(e)}), 500
+
+def parse_point_location(point_str: str) -> tuple[float, float]:
+    """
+    解析知识图谱中POINT格式的经纬度（如"POINT(39.8823 116.4066)"）
+    :param point_str: POINT格式字符串
+    :return: (纬度, 经度) 元组，解析失败返回(None, None)
+    """
+    try:
+        # 提取括号内的数字部分并分割
+        coords = point_str.strip("POINT()").split()
+        if len(coords) != 2:
+            return None, None
+        # 转换为浮点数（注意POINT格式是"纬度 经度"）
+        latitude = float(coords[0])
+        longitude = float(coords[1])
+        return latitude, longitude
+    except (ValueError, IndexError):
+        logger.warning(f"无效的POINT格式: {point_str}")
+        return None, None
