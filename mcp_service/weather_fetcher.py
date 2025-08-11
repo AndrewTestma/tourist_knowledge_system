@@ -11,6 +11,7 @@ class WeatherDataFetcher:
     def __init__(self):
         self.config = load_config()
         self.logger = logging.getLogger("weather_fetcher")
+        self.logger.setLevel(logging.INFO)
         self.api_endpoint = self.config.weather.api_url
         self.api_key = self.config.weather.api_key
         # 构造请求头，完全匹配API要求
@@ -34,7 +35,11 @@ class WeatherDataFetcher:
             }
 
             # 添加调试日志：记录请求端点和参数（关键排查信息）
-            self.logger.debug(f"准备调用天气API | 端点: {self.api_endpoint} | 参数: {params}")
+            self.logger.info(f"准备调用天气API | 端点: {self.api_endpoint} | 参数: {params}")
+            self.logger.info(f"天气API请求URL: {self.api_endpoint}")
+            self.logger.info(f"请求参数: {params}")
+            self.logger.info(f"请求头: {self.headers}")
+
 
             # 发送GET请求
             response = requests.get(
@@ -43,6 +48,10 @@ class WeatherDataFetcher:
                 headers=self.headers,
                 timeout=15
             )
+
+            # 新增：打印响应内容用于调试
+            self.logger.info(f"API响应状态码: {response.status_code}")
+            self.logger.info(f"API响应内容: {response.text[:500]}")  # 只打印前500字符
 
             # 检查响应状态
             response.raise_for_status()

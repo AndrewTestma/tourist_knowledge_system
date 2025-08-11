@@ -12,6 +12,7 @@ class DynamicAttributeManager:
     def __init__(self):
         self.config = load_config()
         self.logger = logging.getLogger("dynamic_attribute_manager")
+        self.logger.setLevel(logging.INFO)
         # 初始化InfluxDB v2客户端
         self.client = InfluxDBClient(
             url=f"http://{self.config.influxdb.host}:{self.config.influxdb.port}",
@@ -22,6 +23,7 @@ class DynamicAttributeManager:
         self.query_api = self.client.query_api()
         # 确保桶存在（v2中bucket替代database）
         self._create_bucket_if_not_exists()
+        # self._clean_conflict_data()
 
     def _create_bucket_if_not_exists(self):
         """检查并创建桶（v2替代v1的create_database）"""
@@ -38,6 +40,24 @@ class DynamicAttributeManager:
         else:
             self.logger.info(f"InfluxDB桶已存在: {self.config.influxdb.bucket}")
 
+    # 可以在DynamicAttributeManager初始化时添加一次清理逻辑（仅执行一次）
+    def _clean_conflict_data(self):
+        """清理旧的冲突数据（首次运行后可删除）"""
+        try:
+            # 删除整个measurement（谨慎使用，会删除所有历史数据）
+            delete_api = self.client.delete_api()
+            start = datetime.datetime(1970, 1, 1, tzinfo=datetime.timezone.utc)
+            stop = datetime.datetime.now(datetime.timezone.utc)
+            delete_api.delete(
+                start, stop,
+                '_measurement="weather_attributes"',
+                bucket=self.config.influxdb.bucket,
+                org=self.config.influxdb.org
+            )
+            self.logger.info("已清理旧的天气属性数据，解决类型冲突")
+        except Exception as e:
+            self.logger.warning(f"清理冲突数据时发生错误: {str(e)}")
+
     def store_weather_attributes(self, attributes: List[Dict]) -> bool:
         """存储天气属性（适配v2的写入API）"""
         if not attributes:
@@ -51,10 +71,17 @@ class DynamicAttributeManager:
                 point = Point("weather_attributes") \
                     .tag("entity_id", attr["entity_id"]) \
                     .tag("attribute_type", attr["attribute_type"]) \
-                    .field("value", attr["value"]) \
                     .time(attr["timestamp"].isoformat())  # 时间字段
 
-                # 添加单位（如果存在）
+                # 根据值的类型选择不同的field，避免类型冲突
+                value = attr["value"]
+                if isinstance(value, (int, float)):
+                    # 数值类型存储到value_num字段
+                    point = point.field("value_num", float(value))
+                else:
+                    # 字符串类型存储到value_str字段
+                    point = point.field("value_str", str(value))
+
                 if "unit" in attr:
                     point = point.field("unit", attr["unit"])
                 points.append(point)
@@ -77,34 +104,72 @@ class DynamicAttributeManager:
         try:
             # 新增：转义特殊字符（Flux中字符串内的单引号用两个单引号转义）
             escaped_entity_id = entity_id.replace("'", "''")
-            # 构建Flux查询（v2的查询语言，替代InfluxQL）
+            bucket = self.config.influxdb.bucket
+
+            # 基础查询部分
+            base_query = f'''
+                from(bucket: "{bucket}")
+                    |> range(start: -30d)
+                    |> filter(fn: (r) => r._measurement == "weather_attributes")
+                    |> filter(fn: (r) => r.entity_id == "{escaped_entity_id}")
+            '''
+
             if attribute_type:
-                # 按实体ID和属性类型过滤
-                # 新增：转义属性类型中的特殊字符
-                escaped_attr_type = attribute_type.replace("'", "''")
-                flux_query = f'''
-                                    from(bucket: "{self.config.influxdb.bucket}")
-                                      |> range(start: -30d)  # 查最近30天数据
-                                      |> filter(fn: (r) => r._measurement == "weather_attributes")
-                                      |> filter(fn: (r) => r.entity_id == '{escaped_entity_id}')  # 改用单引号+转义
-                                      |> filter(fn: (r) => r.attribute_type == '{escaped_attr_type}')  # 改用单引号+转义
-                                      |> last()  # 取最新一条
-                                      |> keep(columns: ["_time", "_value", "entity_id", "attribute_type", "unit"])
-                                '''
+                escaped_attr_type = attribute_type.replace('"', '\\"')
+                query = f'''
+                    {base_query}
+                        |> filter(fn: (r) => r.attribute_type == "{escaped_attr_type}")
+                        |> last()
+                        |> map(fn: (r) => ({{
+                            _time: r._time,
+                            entity_id: r.entity_id,
+                            attribute_type: r.attribute_type,
+                            unit: r.unit,
+                            _value: if exists r.value_num then r.value_num else r.value_str
+                        }}))
+                        |> keep(columns: ["_time", "_value", "entity_id", "attribute_type", "unit"])
+                '''
             else:
-                # 按实体ID查询所有属性类型的最新数据
-                flux_query = f'''
-                                    from(bucket: "{self.config.influxdb.bucket}")
-                                      |> range(start: -30d)
-                                      |> filter(fn: (r) => r._measurement == "weather_attributes")
-                                      |> filter(fn: (r) => r.entity_id == '{escaped_entity_id}')  # 改用单引号+转义
-                                      |> group(columns: ["attribute_type"])  # 按属性类型分组
-                                      |> last()
-                                      |> keep(columns: ["_time", "_value", "entity_id", "attribute_type", "unit"])
-                                '''
+                # 修改为分别查询数值和字符串类型，然后合并结果
+                query_num = f'''
+                    {base_query}
+                        |> filter(fn: (r) => exists r.value_num)
+                        |> group(columns: ["attribute_type"])
+                        |> last()
+                        |> map(fn: (r) => ({{
+                            _time: r._time,
+                            entity_id: r.entity_id,
+                            attribute_type: r.attribute_type,
+                            unit: r.unit,
+                            _value: r.value_num,
+                            _type: "number"
+                        }}))
+                '''
+
+                query_str = f'''
+                    {base_query}
+                        |> filter(fn: (r) => exists r.value_str)
+                        |> group(columns: ["attribute_type"])
+                        |> last()
+                        |> map(fn: (r) => ({{
+                            _time: r._time,
+                            entity_id: r.entity_id,
+                            attribute_type: r.attribute_type,
+                            unit: r.unit,
+                            _value: r.value_str,
+                            _type: "string"
+                        }}))
+                '''
+
+                query = f'''
+                    union(tables: [{query_num}, {query_str}])
+                        |> group(columns: ["attribute_type"])
+                        |> sort(columns: ["_time"], desc: true)
+                        |> keep(columns: ["_time", "_value", "entity_id", "attribute_type", "unit"])
+                '''
 
             # 执行查询
-            result = self.query_api.query(flux_query)
+            result = self.query_api.query(query)
 
             # 处理查询结果（转换为字典格式）
             points = []
