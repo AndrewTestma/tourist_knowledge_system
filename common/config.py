@@ -48,6 +48,12 @@ class WeatherConfig:
     api_url: str
 
 @dataclass
+class CacheConfig:
+    """缓存配置"""
+    weather_max_size: int
+    weather_ttl: int
+
+@dataclass
 class AppConfig:
     """应用全局配置"""
     db: DatabaseConfig
@@ -55,6 +61,7 @@ class AppConfig:
     milvus: MilvusConfig
     influxdb: InfluxDBConfig
     weather: WeatherConfig
+    cache: CacheConfig
     embedding_model: str
     batch_size: int
 
@@ -62,7 +69,8 @@ def load_config() -> AppConfig:
     config = configparser.ConfigParser()
     # 定位到项目根目录下的 config.ini 文件
     config_file_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config.ini')
-    config.read(config_file_path)
+    with open(config_file_path, 'r', encoding='utf-8') as f:
+        config.read_file(f)
 
     db_config = DatabaseConfig(
         host=config.get('database', 'host'),
@@ -101,12 +109,18 @@ def load_config() -> AppConfig:
         api_url=config.get('weather', 'api_url')
     )
 
+    cache_config = CacheConfig(
+        weather_max_size=config.getint('cache', 'weather_max_size'),
+        weather_ttl=config.getint('cache', 'weather_ttl'),
+    )
+
     app_config = AppConfig(
         db=db_config,
         neo4j=neo4j_config,
         milvus=milvus_config,
         influxdb=influxdb_config,
         weather=weather_config,
+        cache=cache_config,
         embedding_model=config.get('app', 'embedding_model'),
         batch_size=config.getint('app', 'batch_size')
     )

@@ -12,7 +12,7 @@ class DynamicAttributeManager:
     def __init__(self):
         self.config = load_config()
         self.logger = logging.getLogger("dynamic_attribute_manager")
-        self.logger.setLevel(logging.INFO)
+        #self.logger.setLevel(logging.INFO)
         # 初始化InfluxDB v2客户端
         self.client = InfluxDBClient(
             url=f"http://{self.config.influxdb.host}:{self.config.influxdb.port}",
@@ -71,7 +71,7 @@ class DynamicAttributeManager:
                 point = Point("weather_attributes") \
                     .tag("entity_id", attr["entity_id"]) \
                     .tag("attribute_type", attr["attribute_type"]) \
-                    .time(attr["timestamp"].isoformat())  # 时间字段
+                    .time(attr["timestamp"].isoformat())
 
                 # 根据值的类型选择不同的field，避免类型冲突
                 value = attr["value"]
@@ -106,70 +106,47 @@ class DynamicAttributeManager:
             escaped_entity_id = entity_id.replace("'", "''")
             bucket = self.config.influxdb.bucket
 
-            # 基础查询部分
-            base_query = f'''
-                from(bucket: "{bucket}")
-                    |> range(start: -30d)
-                    |> filter(fn: (r) => r._measurement == "weather_attributes")
-                    |> filter(fn: (r) => r.entity_id == "{escaped_entity_id}")
+            query = f'''
+                union(tables: [
+                    from(bucket: "{bucket}")
+                      |> range(start: -1h)
+                      |> filter(fn: (r) => r._measurement == "weather_attributes")
+                      |> filter(fn: (r) => r.entity_id == "{escaped_entity_id}")
+                      |> filter(fn: (r) => r._field == "value_num")
+                      |> group(columns: ["attribute_type"])
+                      |> last()
+                      |> map(fn: (r) => ({{
+                          _time: r._time,
+                          entity_id: r.entity_id,
+                          attribute_type: r.attribute_type,
+                          unit: r.unit,
+                          _value: r._value,
+                          _type: "number"
+                      }})),
+                    from(bucket: "{bucket}")
+                      |> range(start: -1h)
+                      |> filter(fn: (r) => r._measurement == "weather_attributes")
+                      |> filter(fn: (r) => r.entity_id == "{escaped_entity_id}")
+                      |> filter(fn: (r) => r._field == "value_str")
+                      |> group(columns: ["attribute_type"])
+                      |> last()
+                      |> map(fn: (r) => ({{
+                          _time: r._time,
+                          entity_id: r.entity_id,
+                          attribute_type: r.attribute_type,
+                          unit: r.unit,
+                          _value: r._value, 
+                          _type: "string"
+                      }}))
+                ])
+                |> group(columns: ["attribute_type"])
+                |> sort(columns: ["_time"], desc: true)
+                |> keep(columns: ["_time", "_value", "entity_id", "attribute_type", "unit"])
             '''
-
-            if attribute_type:
-                escaped_attr_type = attribute_type.replace('"', '\\"')
-                query = f'''
-                    {base_query}
-                        |> filter(fn: (r) => r.attribute_type == "{escaped_attr_type}")
-                        |> last()
-                        |> map(fn: (r) => ({{
-                            _time: r._time,
-                            entity_id: r.entity_id,
-                            attribute_type: r.attribute_type,
-                            unit: r.unit,
-                            _value: if exists r.value_num then r.value_num else r.value_str
-                        }}))
-                        |> keep(columns: ["_time", "_value", "entity_id", "attribute_type", "unit"])
-                '''
-            else:
-                # 修改为分别查询数值和字符串类型，然后合并结果
-                query_num = f'''
-                    {base_query}
-                        |> filter(fn: (r) => exists r.value_num)
-                        |> group(columns: ["attribute_type"])
-                        |> last()
-                        |> map(fn: (r) => ({{
-                            _time: r._time,
-                            entity_id: r.entity_id,
-                            attribute_type: r.attribute_type,
-                            unit: r.unit,
-                            _value: r.value_num,
-                            _type: "number"
-                        }}))
-                '''
-
-                query_str = f'''
-                    {base_query}
-                        |> filter(fn: (r) => exists r.value_str)
-                        |> group(columns: ["attribute_type"])
-                        |> last()
-                        |> map(fn: (r) => ({{
-                            _time: r._time,
-                            entity_id: r.entity_id,
-                            attribute_type: r.attribute_type,
-                            unit: r.unit,
-                            _value: r.value_str,
-                            _type: "string"
-                        }}))
-                '''
-
-                query = f'''
-                    union(tables: [{query_num}, {query_str}])
-                        |> group(columns: ["attribute_type"])
-                        |> sort(columns: ["_time"], desc: true)
-                        |> keep(columns: ["_time", "_value", "entity_id", "attribute_type", "unit"])
-                '''
 
             # 执行查询
             result = self.query_api.query(query)
+            self.logger.info(f"执行查询: {query}")
 
             # 处理查询结果（转换为字典格式）
             points = []
@@ -180,7 +157,7 @@ class DynamicAttributeManager:
                         "entity_id": record["entity_id"],
                         "attribute_type": record["attribute_type"],
                         "value": record.get_value(),
-                        "unit": record["unit"]  # 可能为None
+                        "unit": record.values.get("unit")  # 改为使用get方法，不存在时返回None
                     })
             return points
 

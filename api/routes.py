@@ -5,6 +5,7 @@ from mcp_service.sync_service import WeatherSyncService
 from .schemas import SearchRequest, SearchResponse, SearchResult
 from milvus_module.search_engine import SearchEngine
 from common.config import load_config
+from concurrent.futures import ThreadPoolExecutor
 from typing import cast
 
 # 初始化日志器（使用当前模块名）
@@ -19,6 +20,7 @@ api_bp = Blueprint('api', __name__, url_prefix='/api')
 
 def init_search_engine():
     """初始化搜索引擎（在Flask应用启动时调用）"""
+    logger.setLevel(logging.INFO)
     logger.info("搜索引擎初始化")  # 初始化成功日志
     global search_engine
     try:
@@ -50,7 +52,7 @@ def search_attractions():
         req_data = SearchRequest(**request.json)
 
         # 记录开始搜索
-        logger.debug(f"开始执行搜索 | 查询文本: {req_data.query}, top_k: {req_data.top_k}, 阈值: {req_data.threshold}")
+        logger.info(f"开始执行搜索 | 查询文本: {req_data.query}, top_k: {req_data.top_k}, 阈值: {req_data.threshold}")
 
         # 执行搜索
         results = search_engine.search_similar_attractions(
@@ -77,12 +79,13 @@ def search_attractions():
                 continue
 
             # 检查并更新天气数据（默认1小时间隔）
+            logger.info(f"检查景点 {item['entity_id']} 天气数据")
             latest_weather = weather_service.check_and_update_weather(
                 entity_id=item["entity_id"],
                 longitude=longitude,  # 注意POINT格式是"纬度 经度"，此处取longitude为第二个值
                 latitude=latitude  # latitude为第一个值
             )
-
+            logger.info(f"获取景点 {item['entity_id']} 天气数据结果: {latest_weather}")
             # 将天气数据添加到结果中（可根据需求调整字段名）
             item["basic_info"]["weather_data"] = latest_weather
 

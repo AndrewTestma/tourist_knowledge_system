@@ -18,6 +18,7 @@ class Neo4jSyncService:
         """初始化 Neo4j 同步服务"""
         self.entity_creator = EntityCreator()
         self.logger = logging.getLogger("neo4j_sync_service")
+        # self.logger.setLevel(logging.INFO)
         self.batch_size = 100
 
     def __enter__(self):
@@ -106,6 +107,7 @@ class WeatherSyncService:
         self.processor = WeatherDataProcessor()
         self.storage = DynamicAttributeManager()
         self.logger = logging.getLogger("weather_sync_service")
+        #self.logger.setLevel(logging.INFO)
 
     def sync_weather_data(self, entity_id: str, longitude: float, latitude: float) -> bool:
         """
@@ -119,12 +121,14 @@ class WeatherSyncService:
         try:
             # 1. 获取原始天气数据
             raw_data = self.fetcher.fetch_weather(entity_id, longitude, latitude)
+            self.logger.info(f"获取实体 {entity_id} 的天气数据: {raw_data}")
             if not raw_data:
                 self.logger.error(f"无法获取实体 {entity_id} 的天气数据")
                 return False
 
             # 2. 处理原始数据
             processed_data = self.processor.process_weather_data(entity_id, raw_data)
+            self.logger.info(f"处理实体 {entity_id} 的天气数据: {processed_data}")
             if not processed_data:
                 self.logger.error(f"无法处理实体 {entity_id} 的天气数据")
                 return False
@@ -160,17 +164,19 @@ class WeatherSyncService:
         """
         # 1. 获取当前最新数据
         latest_weather = self.get_entity_weather(entity_id)
-        current_time = datetime.datetime.now(datetime.timezone.utc)
-
+        self.logger.info(f"检查实体 {entity_id} 的天气数据，最新数据: {latest_weather}")
         # 2. 判断是否需要更新（无数据或超过更新间隔）
         need_update = True
         if latest_weather:
-            try:
-                latest_time = datetime.datetime.fromisoformat(latest_weather[0]["time"])
-                time_diff = (current_time - latest_time).total_seconds()
-                need_update = time_diff > update_interval
-            except (KeyError, ValueError) as e:
-                self.logger.warning(f"解析最新天气时间失败: {str(e)}, 强制更新")
+            # 关键修改：检查时间字段类型，若是 datetime 对象则直接使用，否则转换为字符串
+            latest_time = latest_weather[0]["time"]
+            if isinstance(latest_time, datetime.datetime):
+                # 直接使用 datetime 对象计算时间差
+                time_diff = datetime.datetime.now(datetime.timezone.utc) - latest_time
+            else:
+                # 若是字符串则先解析（兼容旧数据）
+                latest_time = datetime.datetime.fromisoformat(latest_time)
+                time_diff = datetime.datetime.now(datetime.timezone.utc) - latest_time
 
         # 3. 需要更新时执行同步
         if need_update:
