@@ -1,103 +1,122 @@
 import datetime
 from typing import List, Dict, Optional
-
-from influxdb import InfluxDBClient
-from common.config import DatabaseConfig, load_config
+from influxdb_client import InfluxDBClient, Point  # v2客户端
+from influxdb_client.client.write_api import SYNCHRONOUS
+from common.config import load_config
 import logging
 
 
 class DynamicAttributeManager:
-    """动态属性管理器，处理知识图谱与时序数据库的关联"""
+    """动态属性管理器，处理知识图谱与时序数据库的关联（适配InfluxDB v2）"""
 
     def __init__(self):
-        self.config =  load_config()
+        self.config = load_config()
         self.logger = logging.getLogger("dynamic_attribute_manager")
-        self.influx_client = InfluxDBClient(
-            host=self.config.influxdb.host,
-            port=self.config.influxdb.port,
-            username=self.config.influxdb.username,
-            password=self.config.influxdb.password,
-            database=self.config.influxdb.database
+        # 初始化InfluxDB v2客户端
+        self.client = InfluxDBClient(
+            url=f"http://{self.config.influxdb.host}:{self.config.influxdb.port}",
+            token=self.config.influxdb.token,
+            org=self.config.influxdb.org
         )
-        # 确保数据库存在
-        self.influx_client.create_database(self.config.influxdb.database)
+        self.write_api = self.client.write_api(write_options=SYNCHRONOUS)
+        self.query_api = self.client.query_api()
+        # 确保桶存在（v2中bucket替代database）
+        self._create_bucket_if_not_exists()
+
+    def _create_bucket_if_not_exists(self):
+        """检查并创建桶（v2替代v1的create_database）"""
+        buckets_api = self.client.buckets_api()
+        bucket = buckets_api.find_bucket_by_name(self.config.influxdb.bucket)
+        if not bucket:
+            # 创建桶（保留时间30天，单位小时）
+            buckets_api.create_bucket(
+                bucket_name=self.config.influxdb.bucket,
+                retention_rules=[{"type": "expire", "everySeconds": 30*24*3600}],
+                org=self.config.influxdb.org
+            )
+            self.logger.info(f"创建InfluxDB桶: {self.config.influxdb.bucket}")
+        else:
+            self.logger.info(f"InfluxDB桶已存在: {self.config.influxdb.bucket}")
 
     def store_weather_attributes(self, attributes: List[Dict]) -> bool:
-        """
-        将处理后的天气属性存储到时序数据库
-
-        :param attributes: 标准化的天气属性列表
-        :return: 存储成功返回True，否则返回False
-        """
+        """存储天气属性（适配v2的写入API）"""
         if not attributes:
             self.logger.warning("没有可存储的天气属性数据")
             return False
 
         try:
-            # 转换为InfluxDB数据格式
             points = []
             for attr in attributes:
-                point = {
-                    "measurement": "weather_attributes",
-                    "tags": {
-                        "entity_id": attr["entity_id"],
-                        "attribute_type": attr["attribute_type"]
-                    },
-                    "time": attr["timestamp"].isoformat(),
-                    "fields": {
-                        "value": attr["value"]
-                    }
-                }
+                # 构建v2的数据点（使用Point类）
+                point = Point("weather_attributes") \
+                    .tag("entity_id", attr["entity_id"]) \
+                    .tag("attribute_type", attr["attribute_type"]) \
+                    .field("value", attr["value"]) \
+                    .time(attr["timestamp"].isoformat())  # 时间字段
 
-                # 如果有单位信息，添加到字段中
+                # 添加单位（如果存在）
                 if "unit" in attr:
-                    point["fields"]["unit"] = attr["unit"]
-
+                    point = point.field("unit", attr["unit"])
                 points.append(point)
 
-            # 写入数据库
-            result = self.influx_client.write_points(points)
-
-            if result:
-                self.logger.info(f"成功存储 {len(points)} 条天气属性数据")
-                return True
-            else:
-                self.logger.error("存储天气属性数据失败")
-                return False
+            # 写入数据到指定桶
+            self.write_api.write(
+                bucket=self.config.influxdb.bucket,
+                org=self.config.influxdb.org,
+                record=points
+            )
+            self.logger.info(f"成功存储 {len(points)} 条天气属性数据")
+            return True
 
         except Exception as e:
             self.logger.error(f"存储天气属性到InfluxDB时发生错误: {str(e)}")
             return False
 
     def get_latest_weather(self, entity_id: str, attribute_type: Optional[str] = None) -> List[Dict]:
-        """
-        获取指定实体的最新天气属性
-
-        :param entity_id: 实体ID
-        :param attribute_type: 可选，指定属性类型
-        :return: 最新的天气属性数据
-        """
+        """查询最新天气属性（使用v2的Flux查询语法）"""
         try:
-            # 构建查询条件
+            # 新增：转义特殊字符（Flux中字符串内的单引号用两个单引号转义）
+            escaped_entity_id = entity_id.replace("'", "''")
+            # 构建Flux查询（v2的查询语言，替代InfluxQL）
             if attribute_type:
-                query = f'''
-                    SELECT * FROM weather_attributes 
-                    WHERE entity_id = '{entity_id}' AND attribute_type = '{attribute_type}'
-                    ORDER BY time DESC LIMIT 1
-                '''
+                # 按实体ID和属性类型过滤
+                # 新增：转义属性类型中的特殊字符
+                escaped_attr_type = attribute_type.replace("'", "''")
+                flux_query = f'''
+                                    from(bucket: "{self.config.influxdb.bucket}")
+                                      |> range(start: -30d)  # 查最近30天数据
+                                      |> filter(fn: (r) => r._measurement == "weather_attributes")
+                                      |> filter(fn: (r) => r.entity_id == '{escaped_entity_id}')  # 改用单引号+转义
+                                      |> filter(fn: (r) => r.attribute_type == '{escaped_attr_type}')  # 改用单引号+转义
+                                      |> last()  # 取最新一条
+                                      |> keep(columns: ["_time", "_value", "entity_id", "attribute_type", "unit"])
+                                '''
             else:
-                query = f'''
-                    SELECT * FROM weather_attributes 
-                    WHERE entity_id = '{entity_id}'
-                    GROUP BY attribute_type
-                    ORDER BY time DESC LIMIT 1
-                '''
+                # 按实体ID查询所有属性类型的最新数据
+                flux_query = f'''
+                                    from(bucket: "{self.config.influxdb.bucket}")
+                                      |> range(start: -30d)
+                                      |> filter(fn: (r) => r._measurement == "weather_attributes")
+                                      |> filter(fn: (r) => r.entity_id == '{escaped_entity_id}')  # 改用单引号+转义
+                                      |> group(columns: ["attribute_type"])  # 按属性类型分组
+                                      |> last()
+                                      |> keep(columns: ["_time", "_value", "entity_id", "attribute_type", "unit"])
+                                '''
 
             # 执行查询
-            result = self.client.query(query)
+            result = self.query_api.query(flux_query)
 
-            # 处理查询结果
-            points = list(result.get_points())
+            # 处理查询结果（转换为字典格式）
+            points = []
+            for table in result:
+                for record in table.records:
+                    points.append({
+                        "time": record.get_time(),
+                        "entity_id": record["entity_id"],
+                        "attribute_type": record["attribute_type"],
+                        "value": record.get_value(),
+                        "unit": record["unit"]  # 可能为None
+                    })
             return points
 
         except Exception as e:

@@ -33,6 +33,9 @@ class WeatherDataFetcher:
                 "location": f"{longitude},{latitude}"
             }
 
+            # 添加调试日志：记录请求端点和参数（关键排查信息）
+            self.logger.debug(f"准备调用天气API | 端点: {self.api_endpoint} | 参数: {params}")
+
             # 发送GET请求
             response = requests.get(
                 url=self.api_endpoint,

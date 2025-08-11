@@ -36,9 +36,9 @@ class InfluxDBConfig:
     """InfluxDB配置"""
     host: str
     port: int
-    username: str
-    password: str
-    database: str
+    token: str
+    org: str
+    bucket: str
 
 
 @dataclass
@@ -91,9 +91,9 @@ def load_config() -> AppConfig:
     influxdb_config = InfluxDBConfig(
         host=config.get('influxdb', 'host'),
         port=config.getint('influxdb', 'port'),
-        username=config.get('influxdb', 'username'),
-        password=config.get('influxdb', 'password'),
-        database=config.get('influxdb', 'database')
+        token=config.get('influxdb', 'token'),
+        org=config.get('influxdb', 'org'),
+        bucket=config.get('influxdb', 'bucket')
     )
 
     weather_config = WeatherConfig(
